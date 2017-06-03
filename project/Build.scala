@@ -17,7 +17,6 @@ object Build {
   object Ver {
     val JAMM            = "0.3.1"
     val KindProjector   = "0.9.4"
-    val Scala211        = "2.11.11"
     val Scala212        = "2.12.2"
   }
 
@@ -34,7 +33,6 @@ object Build {
       "-language:higherKinds",
       "-language:existentials")
     ++ (scalaVersion.value match {
-      case x if x startsWith "2.11." => "-target:jvm-1.6" :: Nil
       case x if x startsWith "2.12." => "-target:jvm-1.8" :: "-opt:l:method" :: Nil
     }))
 
@@ -44,7 +42,6 @@ object Build {
       homepage                      := Some(url("https://github.com/japgolly/" + ghProject)),
       licenses                      += ("Apache-2.0", url("http://opensource.org/licenses/Apache-2.0")),
       scalaVersion                  := Ver.Scala212,
-      crossScalaVersions            := Seq(Ver.Scala211, Ver.Scala212),
       scalacOptions                ++= scalacFlags.value,
       scalacOptions in Test        --= Seq("-Ywarn-dead-code"),
       shellPrompt in ThisBuild      := ((s: State) => Project.extract(s).currentRef.project + "> "),
