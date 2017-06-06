@@ -95,21 +95,21 @@ case class TestPath(fqn: String, groupsInnerToOuter: List[String], name: String)
 trait TestExecutor {
   def runScheduled(skip: Boolean): Unit
 
-  def add(p: => TestPath, t: TestBody, runNow: Boolean): Unit
+  def add(p: => TestPath, t: Proc[_], runNow: Boolean): Unit
 
   def skip(p: => TestPath): Unit
 }
 object TestExecutor {
   def simple: TestExecutor =
     new TestExecutor {
-      val scheduled = new collection.mutable.ArrayBuffer[(() => TestPath, TestBody)]
+      val scheduled = new collection.mutable.ArrayBuffer[(() => TestPath, Proc[_])]
       override def runScheduled(skip: Boolean): Unit =
         if (skip)
           scheduled.foreach(x => this.skip(x._1()))
         else
           scheduled.foreach(x => this.run(x._1(), x._2))
 
-      override def add(p: => TestPath, t: TestBody, runNow: Boolean): Unit =
+      override def add(p: => TestPath, t: Proc[_], runNow: Boolean): Unit =
         if (runNow)
           run(p, t)
         else
@@ -117,17 +117,12 @@ object TestExecutor {
       override def skip(p: => TestPath): Unit =
         println("Skipped: " + p.fullPath)
 
-      def run(p: => TestPath, t: TestBody): Unit =
+      def run(p: => TestPath, t: Proc[_]): Unit =
         t match {
-          case f: TestBody.Sync =>
-            try {
-              f.run()
-              ()
-            } catch {
-              case _: Throwable =>
-            }
-            finally
-              println("Ran: " + p.fullPath)
+          case f: Proc.Sync[_] =>
+            f.attempt.run() // TODO Optimise
+            ()
+            println("Ran: " + p.fullPath)
         }
     }
 }

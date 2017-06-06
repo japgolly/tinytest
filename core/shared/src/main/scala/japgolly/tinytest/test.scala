@@ -77,12 +77,6 @@ object Proc {
   val unit = Sync(() => ())
 }
 
-sealed trait TestBody
-object TestBody {
-  case class Sync(run: () => Any) extends TestBody
-//  case class Async(run: () => Future[Any]) extends TestBody
-}
-
 // TODO Prefix all the things with Tiny?
 
 sealed trait TestTree {
@@ -100,7 +94,7 @@ object TestTree {
   }
 }
 
-final case class Test(name: String, body: TestBody, bucket: Bucket) extends TestTree
+final case class Test(name: String, body: Proc[_], bucket: Bucket) extends TestTree
 
 final case class TestGroup(name: String, testTree: TestTree, bucket: Bucket,
                            aroundAll: Around, aroundEach: Around) extends TestTree
@@ -175,10 +169,10 @@ sealed trait TestDsl {
     ts.foreach(addTest(_)) // not [ts foreach _add] cos addTest may be overridden
 
   def test(name: String)(body: => Any): Test =
-    addTest(Test(name, TestBody.Sync(() => body), _ctx.bucket))
+    addTest(Test(name, Proc.Sync(() => body), _ctx.bucket))
 
 //  def testAsync(name: String)(body: => Future[Any]): Test =
-//    addTest(Test(name, TestBody.Async(() => body), _bucket))
+//    addTest(Test(name, Proc.Async(() => body), _ctx.bucket))
 
   def beforeAll(run: () => Unit): Unit = aroundAll(Around.before(run).run)
   def  afterAll(run: () => Unit): Unit = aroundAll(Around.after(run).run)
