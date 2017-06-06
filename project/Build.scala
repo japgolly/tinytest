@@ -15,9 +15,10 @@ object Build {
     Lib.publicationSettings(ghProject)
 
   object Ver {
-    val JAMM            = "0.3.1"
-    val KindProjector   = "0.9.4"
-    val Scala212        = "2.12.2"
+    val JAMM             = "0.3.1"
+    val KindProjector    = "0.9.4"
+    val Scala212         = "2.12.2"
+    val SbtTestInterface = "1.0"
   }
 
   def scalacFlags = Def.setting(
@@ -82,6 +83,15 @@ object Build {
   lazy val coreJS  = core.js
   lazy val core = crossProject
     .configureCross(commonSettings, publicationSettings)
+    .jvmSettings(
+      libraryDependencies ++= Seq(
+        "org.scala-sbt" % "test-interface" % Ver.SbtTestInterface,
+        "org.scala-js" %% "scalajs-stubs" % scalaJSVersion % "provided"))
+    .jsSettings(
+      libraryDependencies ++= Seq(
+        "org.scala-js" %% "scalajs-test-interface" % scalaJSVersion))
+    .settings(
+      testFrameworks += new TestFramework("japgolly.tinytest.Framework"))
 
   /*
   lazy val bench = project.in(file("bench"))
