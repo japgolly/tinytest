@@ -10,7 +10,7 @@ import scala.{Either => \/}
 [*] Sole/ignore
 [*] Dynamic/data-based tests (eg. ∀a∈[…:A]. name x test)
 [*] Shared tests (test tree as data)
-[ ] Async tests
+[*] Async tests
 [*] Nested tests / groups
 [ ] Dynamically skip tests when `<runtime reason>` (eg. no internet → report "18 tests skipped because no internet")
 [ ] Support testing compilation errors
@@ -171,8 +171,8 @@ sealed trait TestDsl {
   def test(name: String)(body: => Any): Test =
     addTest(Test(name, Proc.Sync(() => body), _ctx.bucket))
 
-//  def testAsync(name: String)(body: => Future[Any]): Test =
-//    addTest(Test(name, Proc.Async(() => body), _ctx.bucket))
+  def testAsync(name: String)(body: => Future[Any]): Test =
+    addTest(Test(name, Proc.Async(() => body), _ctx.bucket))
 
   def beforeAll(run: () => Unit): Unit = aroundAll(Around.before(run).run)
   def  afterAll(run: () => Unit): Unit = aroundAll(Around.after(run).run)

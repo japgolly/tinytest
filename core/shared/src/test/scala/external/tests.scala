@@ -43,7 +43,7 @@ object Example extends TestSuite {
       s"2x $f" ~ assertEq(f + f, f * 2)
   }
 
-  lazy val h = TestGlobal.Resource("horse", Right((123, Proc.unit)))
+  lazy val h = TestGlobal.Resource.successful("horse", 123)
   lazy val c = TestGlobal.Resource("cow", Left(OptionN.empty))
 
   h { i => s"horse = $i" ~ assertEq(i, 123) }

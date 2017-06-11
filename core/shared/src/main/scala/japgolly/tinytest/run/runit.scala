@@ -57,20 +57,30 @@ final case class Task(taskDef: T.TaskDef, cl: ClassLoader, ex: TestExecutor) ext
 
           case t: Test =>
             def path = TestPath(fqn, groupsInnerToOuter, t.name)
+            def normal = ex.add(path, t.body, runNormalNow)
+            def skip(b: Bucket.Skip) = ex.skip(path)
             t.bucket match {
-              case Bucket.Normal => ex.add(path, t.body, runNormalNow)
+              case Bucket.Normal => normal
               case Bucket.Only => ex.add(path, t.body, true); whitelistFound = true
-              case Bucket.Skip(_) => ex.skip(path)
+              case b: Bucket.Skip => skip(b)
+              case b: Bucket.When => b.skip().fold(normal, skip)
             }
 
           case t: Tests =>
             t.tests.foreach(go(groupsInnerToOuter, _, runNormalNow))
 
           case t: TestGroup =>
+            def skip(b: Bucket.Skip) = ex.skip(TestPath(fqn, groupsInnerToOuter, t.name))
             t.bucket match {
               case Bucket.Normal => go2(t.name :: groupsInnerToOuter, t.testTree, runNormalNow)
               case Bucket.Only => whitelistFound = true; go2(t.name :: groupsInnerToOuter, t.testTree, true)
-              case Bucket.Skip(_) => ex.skip(TestPath(fqn, groupsInnerToOuter, t.name))
+              case b: Bucket.Skip => skip(b)
+              case b: Bucket.When =>
+                val o = b.skip()
+                if (o.isEmpty)
+                  go2(t.name :: groupsInnerToOuter, t.testTree, runNormalNow)
+                else
+                  skip(o.get)
             }
         }
 
