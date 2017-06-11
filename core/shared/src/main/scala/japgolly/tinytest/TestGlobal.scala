@@ -68,8 +68,8 @@ object TestGlobal {
 
     def apply[B](body: A => B)(implicit t: TestDsl): Option[B] =
       value match {
-        case Right((a, _)) => Some(body(a))
-        case Left(e) => t.skip(e getOrElse s"$name unavailable")(t.group(s"$name-based test(s)")(None))
+        case Right(a) => Some(body(a))
+        case Left(e) => t.skip(e getOrElse s"$name unavailable")(t.test(s"$name-based test(s)")(())); None
       }
 
     def onShutdown(f: A => Unit): this.type = {

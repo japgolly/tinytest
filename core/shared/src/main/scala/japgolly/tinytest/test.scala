@@ -1,5 +1,6 @@
 package japgolly.tinytest
 
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.{ExecutionContext, Future}
 import scala.{Either => \/}
 
@@ -27,7 +28,8 @@ group  - modifies thread-local ctx so that wraps test(){}
 test   - create, add to ctx, return Test
 sole{} - modifies thread-local ctx
 
-group(name) {
+
+root / test(name) {
   beforeEach {}
   test(name){}
   test(name){}
@@ -35,6 +37,17 @@ group(name) {
   ignore{ test(name){} }
 }
 
+Root ->
+  - aroundEach
+  - aroundAll
+  - List Test
+
+Test ->
+  - name
+  - bucket
+  - aroundEach
+  - aroundAll
+  - List Test
 */
 
 
@@ -79,32 +92,10 @@ object Proc {
 
 // TODO Prefix all the things with Tiny?
 
-sealed trait TestTree {
-
-  def prepend(t: TestTree): Tests =
-    Tests(t :: this :: Nil)
-
-  @inline final def append(t: TestTree): Tests =
-    t.prepend(this)
-}
-object TestTree {
-  val fromList: List[TestTree] => TestTree = {
-    case t :: Nil => t
-    case ts => Tests(ts)
-  }
-}
-
-final case class Test(name: String, body: Proc[_], bucket: Bucket) extends TestTree
-
-final case class TestGroup(name: String, testTree: TestTree, bucket: Bucket,
-                           aroundAll: Around, aroundEach: Around) extends TestTree
-
-final case class Tests(tests: List[TestTree]) extends TestTree {
-  override def prepend(t: TestTree): Tests =
-    Tests(t :: tests)
-}
-
 final case class Around(run: (() => Unit) => Unit) extends AnyVal {
+  def apply(f: => Unit): Unit =
+    run(() => f)
+
   def isEmpty: Boolean =
     run eq Around.empty.run
 
@@ -117,7 +108,7 @@ final case class Around(run: (() => Unit) => Unit) extends AnyVal {
 object Around {
   val empty: Around =
     Around(_())
-  
+
   def before(f: () => Unit): Around = Around(test => { f(); test() })
   def after(f: () => Unit): Around = Around(test => { test(); f() })
 
@@ -127,6 +118,24 @@ object Around {
       get = i insideOf get
   }
 }
+
+sealed trait TestTree
+
+final case class Tests(children: List[TestTree],
+                       aroundAll: Around,
+                       aroundEach: Around) extends TestTree
+object Tests {
+  final class Mutable {
+    val children = new ListBuffer[TestTree]
+    val aroundAll: Around.Var = new Around.Var
+    val aroundEach: Around.Var = new Around.Var
+    def result() = Tests(children.result(), aroundAll.get, aroundEach.get)
+  }
+}
+
+final case class Test(name: String,
+                      body: Proc[_],
+                      bucket: Bucket) extends TestTree
 
 object TestDsl {
   final class StringExt(private val name: String) extends AnyVal {
@@ -142,10 +151,10 @@ object TestDsl {
 //  type Around = (() => Unit) => Unit
 }
 
-final case class Ctx(add: TestTree => Unit,
-                     aroundAll: Around.Var = new Around.Var,
-                     aroundEach: Around.Var = new Around.Var,
-                     bucket: Bucket = Bucket.Normal)
+final class Ctx(val tests: Tests.Mutable = new Tests.Mutable,
+                val bucket: Bucket = Bucket.Normal) {
+  def withBucket(b: Bucket) = new Ctx(tests, b)
+}
 
 sealed trait TestDsl {
   import TestDsl._
@@ -153,16 +162,15 @@ sealed trait TestDsl {
   protected implicit final def _tinytestStringExt(a: String): StringExt = new StringExt(a)
   protected implicit final def _tinytestTestDsl: TestDsl = this
 
-  private[tinytest] val _tests = new collection.mutable.ArrayBuffer[TestTree]
-  private[tinytest] var _ctx = Ctx(_tests += _)
+  private[tinytest] var _ctx = new Ctx
 
-  private def withCtx[A](c: Ctx)(a: => A): A = {
+  private[tinytest] def _withCtx[A](c: Ctx)(a: => A): A = {
     val o = _ctx
     try {_ctx = c; a} finally _ctx = o
   }
 
   def addTest(t: TestTree): t.type = {
-    _ctx.add(t)
+    _ctx.tests.children += t
     t
   }
   def addTests(ts: TestTree*): Unit =
@@ -176,16 +184,16 @@ sealed trait TestDsl {
 
   def beforeAll(run: () => Unit): Unit = aroundAll(Around.before(run).run)
   def  afterAll(run: () => Unit): Unit = aroundAll(Around.after(run).run)
-  def aroundAll(run: (() => Unit) => Unit): Unit = _ctx.aroundAll.addInside(Around(run))
+  def aroundAll(run: (() => Unit) => Unit): Unit = _ctx.tests.aroundAll.addInside(Around(run))
 
   def beforeEach(run: () => Unit): Unit = aroundEach(Around.before(run).run)
   def  afterEach(run: () => Unit): Unit = aroundEach(Around.after(run).run)
-  def aroundEach(run: (() => Unit) => Unit): Unit = _ctx.aroundEach.addInside(Around(run))
+  def aroundEach(run: (() => Unit) => Unit): Unit = _ctx.tests.aroundEach.addInside(Around(run))
 
   private def withBucket(b: Bucket): WithBucket =
     new WithBucket {
       override def apply[A](a: => A) =
-        withCtx(_ctx.copy(bucket = b))(a)
+        _withCtx(_ctx.withBucket(b))(a)
     }
 
   final def only: WithBucket = withBucket(Bucket.Only)
@@ -196,22 +204,11 @@ sealed trait TestDsl {
   final def unless(cond: => Boolean): WithBucket = when(!cond)
   final def unless(cond: => Boolean, reason: => String): WithBucket = when(!cond, reason)
   final private def _when(cond: => Boolean, skip: => Bucket.Skip): WithBucket = withBucket(Bucket.When(() => OptionN.when(cond, skip)))
-
-  def group[A](name: String)(body: => A): A = {
-    val groupTests = List.newBuilder[TestTree]
-    val ctx = Ctx(groupTests += _, bucket = _ctx.bucket)
-    val result = withCtx(ctx)(body)
-    val testTree = TestTree.fromList(groupTests.result())
-    val testGroup = TestGroup(name, testTree, ctx.bucket, ctx.aroundAll.get, ctx.aroundEach.get)
-    _ctx.add(testGroup)
-    result
-  }
-
 }
 
 trait TestSuite extends TestDsl
 
 trait TestAuthor extends TestDsl {
-  def tests: TestTree =
-    TestTree.fromList(_tests.toList)
+  def tests: Tests =
+    _ctx.tests.result()
 }

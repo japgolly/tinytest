@@ -4,7 +4,6 @@ import org.scalajs.testinterface.TestUtils
 import sbt.testing.SubclassFingerprint
 import sbt.{testing => T}
 import scala.annotation.tailrec
-//import japgolly.tinytest.defn._
 
 object TinyTest {
   val fingerprint: T.Fingerprint =
@@ -49,90 +48,109 @@ final case class Task(taskDef: T.TaskDef, cl: ClassLoader, ex: TestExecutor) ext
     val fqn = taskDef.fullyQualifiedName()
     val suite = TestUtils.loadModule(fqn, cl).asInstanceOf[TestSuite]
 
-    var whitelistFound = false
+//- runTests: (T, path)
+//  - aroundAll
+//    - determine tests to run, skip others
+//    - foreach test
+//      - aroundEach
+//        - run test
+//        - if it added more, run those too (T₂, path+)
 
-    def go(groupsInnerToOuter: List[String], tt: TestTree, runNormalNow: Boolean): Unit = {
-      @tailrec def go2(groupsInnerToOuter: List[String], tt: TestTree, runNormalNow: Boolean): Unit =
-        tt match {
+    def runTests(tests: Tests, pathInnerToOuter: List[String]): Unit = {
+      tests.aroundAll {
 
+        // determine tests to run, skip others
+        val normals = List.newBuilder[(Test, TestPath)]
+        val onlys = List.newBuilder[(Test, TestPath)]
+        tests.children foreach {
           case t: Test =>
-            def path = TestPath(fqn, groupsInnerToOuter, t.name)
-            def normal = ex.add(path, t.body, runNormalNow)
-            def skip(b: Bucket.Skip) = ex.skip(path)
-            t.bucket match {
-              case Bucket.Normal => normal
-              case Bucket.Only => ex.add(path, t.body, true); whitelistFound = true
-              case b: Bucket.Skip => skip(b)
-              case b: Bucket.When => b.skip().fold(normal, skip)
-            }
+            val path = TestPath(fqn, pathInnerToOuter, t.name)
+            def skip(s: Bucket.Skip) = ex.skip(path, s.reason)
 
-          case t: Tests =>
-            t.tests.foreach(go(groupsInnerToOuter, _, runNormalNow))
-
-          case t: TestGroup =>
-            def skip(b: Bucket.Skip) = ex.skip(TestPath(fqn, groupsInnerToOuter, t.name))
             t.bucket match {
-              case Bucket.Normal => go2(t.name :: groupsInnerToOuter, t.testTree, runNormalNow)
-              case Bucket.Only => whitelistFound = true; go2(t.name :: groupsInnerToOuter, t.testTree, true)
+              case Bucket.Normal => normals += ((t, path))
+              case Bucket.Only => onlys += ((t, path))
               case b: Bucket.Skip => skip(b)
-              case b: Bucket.When =>
-                val o = b.skip()
-                if (o.isEmpty)
-                  go2(t.name :: groupsInnerToOuter, t.testTree, runNormalNow)
+              case Bucket.When(sf) =>
+                val s = sf()
+                if (s.isEmpty)
+                  skip(s.get)
                 else
-                  skip(o.get)
+                  normals += ((t, path))
             }
+          //        case ts: Tests =>
         }
-
-      go2(groupsInnerToOuter, tt, runNormalNow)
+        val os = onlys.result()
+        val ns = normals.result()
+        val testsToRun: List[(Test, TestPath)] =
+          if (os.isEmpty)
+            ns
+          else {
+            ns.foreach(n => ex.skip(n._2, OptionN.empty))
+            os
+          }
+        
+        for ((test, path) <- testsToRun) {
+          tests.aroundEach {
+            val ctx2 = new Ctx
+            suite._withCtx(ctx2) { // TODO Hey, won't work for shared tests, curse mutability and all its benefits
+              ex.runSync(path, test.body)
+            }
+            if (ctx2.tests.children.nonEmpty)
+              runTests(ctx2.tests.result(), test.name :: pathInnerToOuter)
+          }
+        }
+      }
     }
-
-    suite._tests.foreach { tt =>
-      go(Nil, tt, false)
-    }
-    ex.runScheduled(whitelistFound)
+    
+    runTests(suite._ctx.tests.result(), Nil)
 
     Array.empty
   }
   override def tags(): Array[String] = Array.empty
 }
 
-case class TestPath(fqn: String, groupsInnerToOuter: List[String], name: String) {
+case class TestPath(fqn: String, pathInnerToOuter: List[String], name: String) {
   def fullPath: String =
-    (fqn :: groupsInnerToOuter.reverse).mkString("", ".", "." + name)
+    (fqn :: pathInnerToOuter.reverse).mkString("", ".", "." + name)
 }
 
 trait TestExecutor {
-  def runScheduled(skip: Boolean): Unit
-
-  def add(p: => TestPath, t: Proc[_], runNow: Boolean): Unit
-
-  def skip(p: => TestPath): Unit
+  def runSync(path: => TestPath, test: Proc[_]): Unit
+  def skip(path: => TestPath, reason: OptionN[String]): Unit
 }
 object TestExecutor {
   def simple: TestExecutor =
     new TestExecutor {
-      val scheduled = new collection.mutable.ArrayBuffer[(() => TestPath, Proc[_])]
-      override def runScheduled(skip: Boolean): Unit =
-        if (skip)
-          scheduled.foreach(x => this.skip(x._1()))
-        else
-          scheduled.foreach(x => this.run(x._1(), x._2))
+      import Console._
 
-      override def add(p: => TestPath, t: Proc[_], runNow: Boolean): Unit =
-        if (runNow)
-          run(p, t)
-        else
-          scheduled += ((() => p, t))
-      override def skip(p: => TestPath): Unit =
-        println("Skipped: " + p.fullPath)
+      override def skip(path: => TestPath, reason: OptionN[String]): Unit = {
+        var s = s"[${CYAN}skip$RESET] ${path.fullPath}"
+        if (reason.nonEmpty)
+          s+=s" - ${CYAN}${reason.get}"
+        s += RESET
+        println(s)
+      }
 
-      def run(p: => TestPath, t: Proc[_]): Unit =
-        t match {
+      def runSync(path: => TestPath, test: Proc[_]): Unit =
+        test match {
           case f: Proc.Sync[_] =>
-            f.attempt.run() // TODO Optimise
-            ()
-            println("Ran: " + p.fullPath)
+            val dur = Duration.timeSync(
+              f.attempt.run() // TODO Optimise
+            )
+            println(s"[${GREEN}pass$RESET] ${path.fullPath} $BOLD$BLACK(${dur.fmt})$RESET")
         }
     }
+}
+
+final case class Duration(nanos: Long) extends AnyVal {
+  def fmt = "%,d μs".format(nanos / 1000)
+}
+object Duration {
+  def timeSync(f: => Unit): Duration = {
+    val start = System.nanoTime()
+    f
+    val end = System.nanoTime()
+    new Duration(end - start)
+  }
 }
