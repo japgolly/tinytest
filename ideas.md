@@ -24,3 +24,6 @@ Check out other test libs from other languages
 * Aggregate multi-module test result summaries
 * Self-updating progress/output, maybe something like:
   * a dot per test in a pending bucket which moves into an in-progress bucket and then to pass/fail/skip buckets
+* Capture stdout/stderr during test run, then
+  1. print it out all atomically
+  2. print it out AFTER the test framework prints the test case and result
